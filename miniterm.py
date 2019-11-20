@@ -118,13 +118,16 @@ if os.name == 'nt':  # noqa
 
         def getkey(self):
             while True:
-                z = msvcrt.getwch()
-                if z == unichr(13):
+                key = ord(msvcrt.getch())
+                # print(key)
+                if key == unichr(13):
                     return unichr(10)
-                elif z in (unichr(0), unichr(0x0e)):    # functions keys, ignore
+                elif key in (unichr(0), unichr(0x0e)):    # functions keys, ignore
                     msvcrt.getwch()
+                elif key == 224:
+                    return key
                 else:
-                    return z
+                    return unichr(key)
 
         def cancel(self):
             # CancelIo, CancelSynchronousIo do not seem to work when using
@@ -354,6 +357,10 @@ class Miniterm(object):
         self.receiver_thread = None
         self.rx_decoder = None
         self.tx_decoder = None
+        self.history = []
+        self.hist_idx = None
+        self.buf = ""
+        self.selection_buf = None
 
     def _start_reader(self):
         """Start reader thread"""
@@ -456,6 +463,48 @@ class Miniterm(object):
             self.console.cancel()
             raise       # XXX handle instead of re-raise?
 
+    def endHistorySelection(self):
+        self.selection_buf = None
+        self.hist_idx = None
+
+    def deleteHistSelection(self, line):
+        self.console.write('\b \b' * len(line))
+
+    def historyUp(self):
+        if len(self.history) == 0:
+            return
+
+        if self.hist_idx is None:
+            new_idx = 0
+        else:
+            new_idx = self.hist_idx + 1
+
+        if new_idx < len(self.history): 
+            self.hist_idx = new_idx
+            if self.selection_buf:
+                self.deleteHistSelection(self.selection_buf)
+            self.console.write(self.history[self.hist_idx])
+            self.selection_buf = self.history[self.hist_idx]
+
+    def historyDown(self):
+        if len(self.history) == 0:
+            return
+
+        if self.hist_idx is None:
+            return
+
+        new_idx = self.hist_idx - 1
+
+        if self.selection_buf:
+            self.deleteHistSelection(self.selection_buf)
+
+        if new_idx >= 0: 
+            self.hist_idx = new_idx
+            self.console.write(self.history[self.hist_idx])
+            self.selection_buf = self.history[self.hist_idx]
+        else: 
+            self.endHistorySelection()
+
     def writer(self):
         """\
         Loop and copy console->serial until self.exit_character character is
@@ -474,12 +523,55 @@ class Miniterm(object):
                 if menu_active:
                     self.handle_menu_key(c)
                     menu_active = False
+                elif isinstance(c, int):
+                    key = ord(msvcrt.getch())
+                    if key == 80: #Down arrow
+                        self.historyDown()
+                    elif key == 72: #Up arrow
+                        self.historyUp()
                 elif c == self.menu_character:
                     menu_active = True      # next char will be for menu
                 elif c == self.exit_character:
                     self.stop()             # exit app
                     break
                 else:
+                    if c == unichr(13):
+                        if self.buf:
+                            # print("\nDEBUG: inserting into history: " + str(self.buf))
+                            self.history.insert(0, self.buf)
+                            self.buf = ""
+                            self.hist_idx = None
+                        elif self.selection_buf:
+                            # print("sending cmd from history: " + str(self.selection_buf))
+                            # move this selection from its current index to the top of history
+                            if self.hist_idx is None:
+                                print("ERROR: hist_idx should never be None if selection_buf is set")
+                            self.history.insert(0, self.history.pop(self.hist_idx))
+
+                            # need to first delete selection display from console before writing it to serial, otherwise its displayed in duplicate
+                            self.deleteHistSelection(self.selection_buf)
+                            self.serial.write(self.tx_encoder.encode(self.selection_buf + c))
+                            self.buf = ""
+                            self.endHistorySelection()
+                            continue
+                    elif self.selection_buf is not None:
+                        # delete selection text from console (it will now be written to serial and managed there)
+                        self.deleteHistSelection(self.selection_buf)
+
+                        if c == unichr(8):
+                            self.buf = self.selection_buf[:-1]
+                        else:
+                            self.buf = self.selection_buf + c
+
+                        self.serial.write(self.tx_encoder.encode(self.selection_buf))
+                        self.endHistorySelection()
+                    else:
+                        if c == unichr(8):
+                            self.buf = self.buf[:-1]
+                        else:
+                            self.buf += c
+                            
+
                     #~ if self.raw:
                     text = c
                     for transformation in self.tx_transformations:

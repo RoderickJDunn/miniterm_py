@@ -365,18 +365,24 @@ class CmdHistory(object):
             print("ERROR: Must provide either a command or a replace_idx")
             sys.exit()
 
+        # print("DEBUG: [INSERT]  command: {}   |  replace_idx: {}".format(command, replace_idx))
 
         if command:
             # check if command already exists in history
             if not command in self.hist_set:
+                # print("DEBUG: Adding new command to history: " + str(command))
                 self.hist_set.update(command)
             else:
+                # print("DEBUG: Command already exists in history: " + str(command))
                 # command already exists in history. Find its index
                 for idx, cmd in enumerate(self.buffer):
                     if cmd == command:
                         replace_idx = idx
+                        print("DEBUG: found command at index: " + str(replace_idx))
 
-        if replace_idx:
+
+        if replace_idx is not None:
+            # print("DEBUG: removing command at index: " + str(replace_idx))
             command = self.buffer.pop(replace_idx)
 
         command = command.strip()
@@ -532,8 +538,17 @@ class Miniterm(object):
         self.selection_buf = None
         self.hist_idx = None
 
-    def deleteHistSelection(self, line):
+    def deleteFromConsole(self, line):
         self.console.write('\b \b' * len(line))
+
+    def deleteFromSerial(self, line):
+        
+        self.serial.write(self.tx_encoder.encode(unichr(8) * len(line)))
+
+        import time
+        # short delay required to allow serial operation to complete, otherwise too many characters
+        # are deleted from console. Don't really understand
+        time.sleep(0.1)
 
     def historyUp(self):
         if self.hist_idx is None:
@@ -541,12 +556,21 @@ class Miniterm(object):
         else:
             new_idx = self.hist_idx + 1
 
+        # clear any console & serial content
+        if self.buf:
+            self.deleteFromConsole(self.buf)
+            self.deleteFromSerial(self.buf)
+            # self.serial.flush()
+            self.buf = ""
+
         next_item = self.history.get(new_idx)
+        # print("next_item: " +str(next_item))
 
         if next_item: 
             self.hist_idx = new_idx
             if self.selection_buf:
-                self.deleteHistSelection(self.selection_buf)
+                # print("DEBUG: deleting from console: " + str(self.selection_buf))
+                self.deleteFromConsole(self.selection_buf)
             self.console.write(next_item)
             self.selection_buf = next_item
 
@@ -557,7 +581,7 @@ class Miniterm(object):
         new_idx = self.hist_idx - 1
 
         if self.selection_buf:
-            self.deleteHistSelection(self.selection_buf)
+            self.deleteFromConsole(self.selection_buf)
 
         next_item = self.history.get(new_idx)
 
@@ -612,14 +636,16 @@ class Miniterm(object):
                             self.history.insert(0, replace_idx=self.hist_idx)
 
                             # need to first delete selection display from console before writing it to serial, otherwise its displayed in duplicate
-                            self.deleteHistSelection(self.selection_buf)
+                            self.deleteFromConsole(self.selection_buf)
                             self.serial.write(self.tx_encoder.encode(self.selection_buf + c))
                             self.buf = ""
                             self.endHistorySelection()
                             continue
                     elif self.selection_buf is not None:
+                        # print("\nDEBUG: selection_buf not null: " + str(self.selection_buf))
+
                         # delete selection text from console (it will now be written to serial and managed there)
-                        self.deleteHistSelection(self.selection_buf)
+                        self.deleteFromConsole(self.selection_buf)
 
                         if c == unichr(8):
                             self.buf = self.selection_buf[:-1]

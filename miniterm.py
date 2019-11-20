@@ -20,6 +20,8 @@ from serial.tools import hexlify_codec
 
 codecs.register(lambda c: hexlify_codec.getregentry() if c == 'hexlify' else None)
 
+history_file = "C:\\Users\\rdunn\\Documents\\Tools\\miniterm_mod\\history.txt"
+
 try:
     raw_input
 except NameError:
@@ -333,6 +335,55 @@ def ask_for_port():
             port = ports[index]
         return port
 
+class CmdHistory(object):
+    def __init__(self, filepath):
+        self.path = filepath
+        self.buffer = []
+
+        self.reloadHistory()
+
+    def reloadHistory(self):
+        with open(history_file, "a+") as f:
+            f.seek(0)
+            self.buffer = f.read().splitlines()
+            self.buffer.reverse()
+
+    def insert(self, idx, command=None, replace_idx=None):
+        """ idx         --> the index in the file to insert the command
+            command     --> optional new command to insert at 'idx'
+            replace_idx --> optional index of existing command to move to top of list
+        """
+
+        # fail fast
+        if command and replace_idx:
+            print("ERROR: cannot provide both a command and a replace_idx")
+            sys.exit()
+        elif command is None and replace_idx is None:
+            print("ERROR: Must provide either a command or a replace_idx")
+            sys.exit()
+
+        if not command:
+            command = self.buffer.pop(replace_idx)
+
+        command = command.strip()
+
+        self.buffer.insert(0, command)
+
+        # print("DEBUG: new buffer: " +str(self.buffer))
+
+        # make a reverse-copy of list (otherwise buffer will be reversed, and we don't want that)
+        rev_list = self.buffer[::-1]
+
+        with open(history_file, "r+") as f:
+            f.write("\n".join(rev_list))
+
+    def get(self, idx):
+        if len(self.buffer) > 0 and idx >=0 and idx < len(self.buffer):
+            return self.buffer[idx]
+        else:
+            return None
+        
+
 
 class Miniterm(object):
     """\
@@ -357,11 +408,11 @@ class Miniterm(object):
         self.receiver_thread = None
         self.rx_decoder = None
         self.tx_decoder = None
-        self.history = []
+        self.history = CmdHistory(history_file)
         self.hist_idx = None
         self.buf = ""
         self.selection_buf = None
-
+        
     def _start_reader(self):
         """Start reader thread"""
         self._reader_alive = True
@@ -471,25 +522,21 @@ class Miniterm(object):
         self.console.write('\b \b' * len(line))
 
     def historyUp(self):
-        if len(self.history) == 0:
-            return
-
         if self.hist_idx is None:
             new_idx = 0
         else:
             new_idx = self.hist_idx + 1
 
-        if new_idx < len(self.history): 
+        next_item = self.history.get(new_idx)
+
+        if next_item: 
             self.hist_idx = new_idx
             if self.selection_buf:
                 self.deleteHistSelection(self.selection_buf)
-            self.console.write(self.history[self.hist_idx])
-            self.selection_buf = self.history[self.hist_idx]
+            self.console.write(next_item)
+            self.selection_buf = next_item
 
     def historyDown(self):
-        if len(self.history) == 0:
-            return
-
         if self.hist_idx is None:
             return
 
@@ -498,10 +545,12 @@ class Miniterm(object):
         if self.selection_buf:
             self.deleteHistSelection(self.selection_buf)
 
-        if new_idx >= 0: 
+        next_item = self.history.get(new_idx)
+
+        if next_item: 
             self.hist_idx = new_idx
-            self.console.write(self.history[self.hist_idx])
-            self.selection_buf = self.history[self.hist_idx]
+            self.console.write(next_item)
+            self.selection_buf = next_item
         else: 
             self.endHistorySelection()
 
@@ -538,7 +587,7 @@ class Miniterm(object):
                     if c == unichr(13):
                         if self.buf:
                             # print("\nDEBUG: inserting into history: " + str(self.buf))
-                            self.history.insert(0, self.buf)
+                            self.history.insert(0, command=self.buf)
                             self.buf = ""
                             self.hist_idx = None
                         elif self.selection_buf:
@@ -546,7 +595,7 @@ class Miniterm(object):
                             # move this selection from its current index to the top of history
                             if self.hist_idx is None:
                                 print("ERROR: hist_idx should never be None if selection_buf is set")
-                            self.history.insert(0, self.history.pop(self.hist_idx))
+                            self.history.insert(0, replace_idx=self.hist_idx)
 
                             # need to first delete selection display from console before writing it to serial, otherwise its displayed in duplicate
                             self.deleteHistSelection(self.selection_buf)

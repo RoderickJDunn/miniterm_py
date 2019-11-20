@@ -339,6 +339,7 @@ class CmdHistory(object):
     def __init__(self, filepath):
         self.path = filepath
         self.buffer = []
+        self.hist_set = set()
 
         self.reloadHistory()
 
@@ -346,7 +347,9 @@ class CmdHistory(object):
         with open(history_file, "a+") as f:
             f.seek(0)
             self.buffer = f.read().splitlines()
-            self.buffer.reverse()
+
+        self.buffer.reverse()
+        self.hist_set.update(self.buffer)
 
     def insert(self, idx, command=None, replace_idx=None):
         """ idx         --> the index in the file to insert the command
@@ -362,7 +365,18 @@ class CmdHistory(object):
             print("ERROR: Must provide either a command or a replace_idx")
             sys.exit()
 
-        if not command:
+
+        if command:
+            # check if command already exists in history
+            if not command in self.hist_set:
+                self.hist_set.update(command)
+            else:
+                # command already exists in history. Find its index
+                for idx, cmd in enumerate(self.buffer):
+                    if cmd == command:
+                        replace_idx = idx
+
+        if replace_idx:
             command = self.buffer.pop(replace_idx)
 
         command = command.strip()
